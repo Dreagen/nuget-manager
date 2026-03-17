@@ -1,17 +1,23 @@
 use std::{
     error::Error,
     fs,
+    io::Read,
     path::{Path, PathBuf},
+    process::Command,
 };
+
+use serde::{Deserialize, Serialize};
 
 type Result<T> = core::result::Result<T, Box<dyn Error>>;
 
 fn main() {
-    let projects = find_projects(Path::new("."));
+    let mut projects = find_projects(Path::new("."));
 
-    for project in projects {
+    for project in projects.iter() {
         println!("project found: {:?}", project);
     }
+
+    projects[0].get_available_versions();
 }
 
 fn find_projects(path: &Path) -> Vec<Project> {
@@ -66,6 +72,21 @@ impl Project {
             references: package_references,
         })
     }
+
+    fn get_available_versions(&mut self) {
+        let mut buffer = String::new();
+        Command::new("dotnet")
+            .args(["package", "search", &self.references[0].name])
+            .spawn()
+            .unwrap()
+            .stdout
+            .take()
+            .unwrap()
+            .read_to_string(&mut buffer)
+            .unwrap();
+
+        println!("package list output: {}", buffer);
+    }
 }
 
 impl PackageReference {
@@ -92,9 +113,10 @@ impl PackageReference {
 
         Ok(PackageReference {
             name: package_reference_line[name_start..name_end].to_string(),
-            version: PackageVersion {
+            current_version: PackageVersion {
                 version: package_reference_line[version_start..version_end].to_string(),
             },
+            available_versions: vec![],
         })
     }
 }
@@ -109,10 +131,28 @@ struct Project {
 #[derive(Debug)]
 struct PackageReference {
     name: String,
-    version: PackageVersion,
+    current_version: PackageVersion,
+    available_versions: Vec<PackageVersion>,
 }
 
 #[derive(Debug)]
 struct PackageVersion {
     version: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct VersionInformation {
+    search_result: Vec<VersionSearchResult>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct VersionSearchResult {
+    source_name: String,
+    packages: Vec<VersionPackage>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct VersionPackage {
+    id: String,
+    latest_version: String,
 }
