@@ -174,23 +174,16 @@ impl Project {
             package_reference.latest_version = package_reference
                 .available_versions
                 .iter()
-                .filter_map(|p| SemanticPackageVersion::from_package_version(p))
-                .max()
-                .map(|s| s.to_package_version());
+                .filter_map(SemanticPackageVersion::from_package_version)
+                .max();
 
-            if package_reference.latest_version.is_none() {
-                package_reference.status = PackageReferenceStatus::Unknown;
-            }
+            let current_version =
+                SemanticPackageVersion::from_package_version(&package_reference.current_version);
 
-            let latest = &package_reference.latest_version;
-            package_reference.status = match SemanticPackageVersion::from_package_version(
-                &package_reference.current_version,
-            ) {
-                Some(current_version) => current_version.compare(
-                    &SemanticPackageVersion::from_package_version(&latest.as_ref().unwrap()),
-                ),
-                None => PackageReferenceStatus::Unknown,
-            }
+            package_reference.status = match (&current_version, &package_reference.latest_version) {
+                (Some(current), Some(latest)) => current.compare(latest),
+                _ => PackageReferenceStatus::Unknown,
+            };
         }
 
         Ok(Project {
@@ -284,7 +277,7 @@ impl PackageReference {
 struct PackageReference {
     name: String,
     current_version: PackageVersion,
-    latest_version: Option<PackageVersion>,
+    latest_version: Option<SemanticPackageVersion>,
     available_versions: HashSet<PackageVersion>,
     status: PackageReferenceStatus,
 }
@@ -307,26 +300,6 @@ impl PackageVersion {
 #[derive(Debug, Hash, PartialEq, Eq)]
 struct PackageVersion {
     version: String,
-}
-
-impl Ord for SemanticPackageVersion {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        if self.major < other.major {
-            return std::cmp::Ordering::Less;
-        } else if self.major > other.major {
-            return std::cmp::Ordering::Greater;
-        } else if self.minor < other.minor {
-            return std::cmp::Ordering::Less;
-        } else if self.minor > other.minor {
-            return std::cmp::Ordering::Greater;
-        } else if self.patch < other.patch {
-            return std::cmp::Ordering::Less;
-        } else if self.patch > other.patch {
-            return std::cmp::Ordering::Greater;
-        } else {
-            return std::cmp::Ordering::Equal;
-        }
-    }
 }
 
 impl SemanticPackageVersion {
@@ -367,24 +340,23 @@ impl SemanticPackageVersion {
         }
     }
 
-    fn compare(&self, other: &Option<SemanticPackageVersion>) -> PackageReferenceStatus {
+    fn compare(&self, other: &SemanticPackageVersion) -> PackageReferenceStatus {
         match other {
-            Some(other_version) if self.major < other_version.major => {
+            other_version if self.major < other_version.major => {
                 PackageReferenceStatus::BehindMajor
             }
-            Some(other_version) if self.minor < other_version.minor => {
+            other_version if self.minor < other_version.minor => {
                 PackageReferenceStatus::BehindMinor
             }
-            Some(other_version) if self.patch < other_version.patch => {
+            other_version if self.patch < other_version.patch => {
                 PackageReferenceStatus::BehindPatch
             }
-            Some(_) => PackageReferenceStatus::UpToDate,
-            None => PackageReferenceStatus::Unknown,
+            _ => PackageReferenceStatus::UpToDate,
         }
     }
 }
 
-#[derive(PartialOrd, PartialEq, Eq, Debug)]
+#[derive(PartialOrd, PartialEq, Eq, Debug, Ord)]
 struct SemanticPackageVersion {
     major: isize,
     minor: isize,
@@ -409,4 +381,30 @@ struct VersionSearchResult {
 struct VersionPackage {
     id: String,
     version: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{PackageVersion, SemanticPackageVersion};
+
+    #[test]
+    fn ordering_of_semantic_package_version() {
+        let package_versions = vec![
+            PackageVersion::new("0.9.9".to_string()),
+            PackageVersion::new("1.0.0".to_string()),
+            PackageVersion::new("0.9.8".to_string()),
+        ];
+
+        let mut versions = package_versions
+            .iter()
+            .filter_map(SemanticPackageVersion::from_package_version)
+            .collect::<Vec<_>>();
+
+        versions.sort();
+        versions.reverse();
+
+        assert_eq!("1.0.0", versions[0].to_package_version().version);
+        assert_eq!("0.9.9", versions[1].to_package_version().version);
+        assert_eq!("0.9.8", versions[2].to_package_version().version);
+    }
 }
