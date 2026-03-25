@@ -11,6 +11,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 type Result<T> = core::result::Result<T, Box<dyn Error>>;
 
@@ -24,9 +25,24 @@ fn main() {
     print!("Loading projects...");
     io::stdout().flush().unwrap();
 
-    find_projects(Path::new("."))
-        .into_iter()
-        .for_each(|p| p.print());
+    let projects = Arc::new(find_projects(Path::new(".")));
+    let references: Arc<Mutex<Vec<PackageReference>>> = Arc::new(Mutex::new(vec![]));
+
+    thread::scope(|s| {
+        for project in projects.iter() {
+            let mutex = references.clone();
+            s.spawn(move || {
+                let _ = match project.resolve_packages() {
+                    Ok(mut packages) => mutex.lock().unwrap().append(&mut packages),
+                    Err(e) => println!("Error resolving packagings: {}", e),
+                };
+            });
+        }
+    });
+
+    projects
+        .iter()
+        .for_each(|p| p.print(&references.clone().lock().unwrap()));
 }
 
 fn find_projects(path: &Path) -> Vec<Project> {
@@ -45,18 +61,13 @@ fn find_projects(path: &Path) -> Vec<Project> {
             Ok(_) if path.file_name().to_string_lossy().ends_with(".csproj") => {
                 let name = path.file_name().to_string_lossy().into_owned();
                 let spinner = print_with_spinner(format!(
-                    "\x1b[2K\rLoading reference information for {}{}{}",
+                    "\x1b[2K\rLoading project {}{}{}",
                     GREEN, name, RESET
                 ));
 
-                let result = Project::new(path.path(), name);
+                projects.push(Project::new(path.path(), name));
 
                 spinner.stop();
-
-                match result {
-                    Ok(project) => projects.push(project),
-                    Err(err) => println!("{}", err),
-                }
             }
             Err(e) => println!(
                 "couldn't get file type from path: {} - error: {}",
@@ -109,12 +120,25 @@ struct Spinner {
 }
 
 impl Project {
-    fn new(path: PathBuf, name: String) -> Result<Self> {
-        let mut package_references = fs::read_to_string(&path)?
+    fn new(path: PathBuf, name: String) -> Self {
+        Project {
+            id: Uuid::new_v4(),
+            name: name,
+            path: path,
+        }
+    }
+
+    fn resolve_packages(&self) -> Result<Vec<PackageReference>> {
+        let spinner = print_with_spinner(format!(
+            "\x1b[2K\rLoading references for project {}{}{}",
+            GREEN, self.name, RESET
+        ));
+
+        let mut package_references = fs::read_to_string(&self.path)?
             .lines()
             .map(|line| line.to_string())
             .filter(|line| line.trim_start().starts_with("<PackageReference"))
-            .map(PackageReference::new)
+            .map(|line| PackageReference::new(self.id, line))
             .inspect(|package_ref| {
                 if package_ref.is_err() {
                     println!("{}", package_ref.as_ref().unwrap_err().to_string());
@@ -167,7 +191,7 @@ impl Project {
                 }
                 Err(e) => println!(
                     "Failed to parse version information for project: {} - {}",
-                    name, e
+                    self.name, e
                 ),
             }
 
@@ -186,14 +210,18 @@ impl Project {
             };
         }
 
-        Ok(Project {
-            name,
-            references: package_references,
-        })
+        spinner.stop();
+
+        Ok(package_references)
     }
 
-    fn print(&self) {
-        if self.references.len() == 0 {
+    fn print(&self, package_references: &Vec<PackageReference>) {
+        let references = package_references
+            .iter()
+            .filter(|p| p.project_id == self.id)
+            .collect::<Vec<_>>();
+
+        if references.len() == 0 {
             return;
         }
 
@@ -203,7 +231,7 @@ impl Project {
             "", "Name", "Current", "Latest"
         );
 
-        for reference in &self.references {
+        for reference in references {
             let latest = reference
                 .get_latest_available_version()
                 .map(|v| v.version)
@@ -227,12 +255,13 @@ impl Project {
 
 #[derive(Debug)]
 struct Project {
+    id: Uuid,
     name: String,
-    references: Vec<PackageReference>,
+    path: PathBuf,
 }
 
 impl PackageReference {
-    fn new(package_reference_line: String) -> Result<Self> {
+    fn new(project_id: Uuid, package_reference_line: String) -> Result<Self> {
         let name_start = package_reference_line
             .find("Include=\"")
             .ok_or("no Include=\" found in package reference line")?
@@ -254,6 +283,7 @@ impl PackageReference {
             + version_start;
 
         Ok(PackageReference {
+            project_id,
             name: package_reference_line[name_start..name_end].to_string(),
             current_version: PackageVersion {
                 version: package_reference_line[version_start..version_end].to_string(),
@@ -275,6 +305,7 @@ impl PackageReference {
 
 #[derive(Debug)]
 struct PackageReference {
+    project_id: Uuid,
     name: String,
     current_version: PackageVersion,
     latest_version: Option<SemanticPackageVersion>,
