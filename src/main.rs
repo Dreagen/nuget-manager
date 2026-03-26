@@ -25,24 +25,31 @@ fn main() {
     print!("Loading projects...");
     io::stdout().flush().unwrap();
 
-    let projects = Arc::new(find_projects(Path::new(".")));
-    let references: Arc<Mutex<Vec<PackageReference>>> = Arc::new(Mutex::new(vec![]));
+    let projects = find_projects(Path::new("."));
 
-    thread::scope(|s| {
-        for project in projects.iter() {
-            let mutex = references.clone();
-            s.spawn(move || {
-                let _ = match project.resolve_packages() {
-                    Ok(mut packages) => mutex.lock().unwrap().append(&mut packages),
-                    Err(e) => println!("Error resolving packagings: {}", e),
-                };
-            });
-        }
-    });
+    let references = thread::scope(|s| {
+        projects
+            .iter()
+            .map(|p| {
+                s.spawn(move || match p.resolve_packages() {
+                    Ok(packages) => packages,
+                    Err(e) => {
+                        println!("Error resolving packagings: {}", e);
+                        vec![]
+                    }
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|jh| jh.join().map_err(|e| format!("{:?}", e).into()))
+            .collect::<Result<Vec<_>>>()
+    })
+    .unwrap()
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
 
-    projects
-        .iter()
-        .for_each(|p| p.print(&references.clone().lock().unwrap()));
+    projects.iter().for_each(|p| p.print(&references));
 }
 
 fn find_projects(path: &Path) -> Vec<Project> {
