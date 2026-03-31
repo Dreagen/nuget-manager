@@ -60,10 +60,10 @@ fn parse_filter_flag() -> Option<VersionFilter> {
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         if arg == "-f" {
-            return match iter.next().map(|s| s.as_str()) {
-                Some("major") => Some(VersionFilter::Major),
-                Some("minor") => Some(VersionFilter::Minor),
-                Some("patch") => Some(VersionFilter::Patch),
+            return match iter.next().map(|s| s.to_lowercase()) {
+                Some(ref v) if v == "major" => Some(VersionFilter::Major),
+                Some(ref v) if v == "minor" => Some(VersionFilter::Minor),
+                Some(ref v) if v == "patch" => Some(VersionFilter::Patch),
                 Some(other) => {
                     eprintln!(
                         "Unknown filter value '{}'. Valid values are: major, minor, patch",
