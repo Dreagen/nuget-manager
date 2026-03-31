@@ -1,5 +1,6 @@
 use std::{
     collections::HashSet,
+    env,
     error::Error,
     fs,
     io::{self, Read, Write},
@@ -22,6 +23,8 @@ const BLUE: &str = "\x1b[34m";
 const RESET: &str = "\x1b[0m";
 
 fn main() {
+    let filter = parse_filter_flag();
+
     print!("Loading projects...");
     io::stdout().flush().unwrap();
 
@@ -49,7 +52,50 @@ fn main() {
     .flatten()
     .collect::<Vec<_>>();
 
-    projects.iter().for_each(|p| p.print(&references));
+    projects.iter().for_each(|p| p.print(&references, &filter));
+}
+
+fn parse_filter_flag() -> Option<VersionFilter> {
+    let args: Vec<String> = env::args().collect();
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "-f" {
+            return match iter.next().map(|s| s.as_str()) {
+                Some("major") => Some(VersionFilter::Major),
+                Some("minor") => Some(VersionFilter::Minor),
+                Some("patch") => Some(VersionFilter::Patch),
+                Some(other) => {
+                    eprintln!(
+                        "Unknown filter value '{}'. Valid values are: major, minor, patch",
+                        other
+                    );
+                    std::process::exit(1);
+                }
+                None => {
+                    eprintln!("Flag -f requires a value: major, minor, or patch");
+                    std::process::exit(1);
+                }
+            };
+        }
+    }
+    None
+}
+
+#[derive(Debug, PartialEq)]
+enum VersionFilter {
+    Major,
+    Minor,
+    Patch,
+}
+
+impl VersionFilter {
+    fn matches(&self, status: &PackageReferenceStatus) -> bool {
+        match self {
+            VersionFilter::Major => matches!(status, PackageReferenceStatus::BehindMajor),
+            VersionFilter::Minor => matches!(status, PackageReferenceStatus::BehindMinor),
+            VersionFilter::Patch => matches!(status, PackageReferenceStatus::BehindPatch),
+        }
+    }
 }
 
 fn find_projects(path: &Path) -> Vec<Project> {
@@ -222,10 +268,14 @@ impl Project {
         Ok(package_references)
     }
 
-    fn print(&self, package_references: &Vec<PackageReference>) {
+    fn print(&self, package_references: &Vec<PackageReference>, filter: &Option<VersionFilter>) {
         let references = package_references
             .iter()
             .filter(|p| p.project_id == self.id)
+            .filter(|p| match filter {
+                None => true,
+                Some(f) => f.matches(&p.status),
+            })
             .collect::<Vec<_>>();
 
         if references.len() == 0 {
@@ -423,7 +473,7 @@ struct VersionPackage {
 
 #[cfg(test)]
 mod tests {
-    use crate::{PackageVersion, SemanticPackageVersion};
+    use crate::{PackageVersion, PackageReferenceStatus, SemanticPackageVersion, VersionFilter};
 
     #[test]
     fn ordering_of_semantic_package_version() {
@@ -444,5 +494,42 @@ mod tests {
         assert_eq!("1.0.0", versions[0].to_package_version().version);
         assert_eq!("0.9.9", versions[1].to_package_version().version);
         assert_eq!("0.9.8", versions[2].to_package_version().version);
+    }
+
+    #[test]
+    fn version_filter_major_matches_behind_major() {
+        assert!(VersionFilter::Major.matches(&PackageReferenceStatus::BehindMajor));
+    }
+
+    #[test]
+    fn version_filter_minor_matches_behind_minor() {
+        assert!(VersionFilter::Minor.matches(&PackageReferenceStatus::BehindMinor));
+    }
+
+    #[test]
+    fn version_filter_patch_matches_behind_patch() {
+        assert!(VersionFilter::Patch.matches(&PackageReferenceStatus::BehindPatch));
+    }
+
+    #[test]
+    fn version_filter_major_does_not_match_minor_or_patch() {
+        assert!(!VersionFilter::Major.matches(&PackageReferenceStatus::BehindMinor));
+        assert!(!VersionFilter::Major.matches(&PackageReferenceStatus::BehindPatch));
+        assert!(!VersionFilter::Major.matches(&PackageReferenceStatus::UpToDate));
+    }
+
+    #[test]
+    fn version_filter_none_matches_all_statuses() {
+        let filter: Option<VersionFilter> = None;
+        let all = [
+            PackageReferenceStatus::BehindMajor,
+            PackageReferenceStatus::BehindMinor,
+            PackageReferenceStatus::BehindPatch,
+            PackageReferenceStatus::UpToDate,
+            PackageReferenceStatus::Unknown,
+        ];
+        for status in &all {
+            assert!(filter.as_ref().map_or(true, |f| f.matches(status)));
+        }
     }
 }
