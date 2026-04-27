@@ -21,6 +21,8 @@ const YELLOW: &str = "\x1b[33m";
 const BLUE: &str = "\x1b[34m";
 const RESET: &str = "\x1b[0m";
 
+mod terminal_writer;
+
 fn main() {
     print!("Loading projects...");
     io::stdout().flush().unwrap();
