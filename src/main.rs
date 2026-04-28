@@ -13,6 +13,8 @@ use std::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::terminal_writer::TerminalWriter;
+
 type Result<T> = core::result::Result<T, Box<dyn Error>>;
 
 const GREEN: &str = "\x1b[32m";
@@ -27,13 +29,16 @@ fn main() {
     print!("Loading projects...");
     io::stdout().flush().unwrap();
 
+    let terminal_writer = Arc::new(TerminalWriter::new());
+
     let projects = find_projects(Path::new("."));
 
     let references = thread::scope(|s| {
         projects
             .iter()
             .map(|p| {
-                s.spawn(move || match p.resolve_packages() {
+                let tw = terminal_writer.clone();
+                s.spawn(move || match p.resolve_packages(&tw) {
                     Ok(packages) => packages,
                     Err(e) => {
                         println!("Error resolving packagings: {}", e);
@@ -137,11 +142,8 @@ impl Project {
         }
     }
 
-    fn resolve_packages(&self) -> Result<Vec<PackageReference>> {
-        let spinner = print_with_spinner(format!(
-            "\x1b[2K\rLoading references for project {}{}{}",
-            GREEN, self.name, RESET
-        ));
+    fn resolve_packages(&self, terminal_writer: &TerminalWriter) -> Result<Vec<PackageReference>> {
+        let print_id = terminal_writer.write_async_process(format!("Loading references for project {}", self.name));
 
         let mut package_references = fs::read_to_string(&self.path)?
             .lines()
@@ -219,7 +221,7 @@ impl Project {
             };
         }
 
-        spinner.stop();
+        terminal_writer.end_async_process(print_id);
 
         Ok(package_references)
     }
